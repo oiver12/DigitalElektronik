@@ -1,0 +1,21 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"esp_wifi.h": "c",
+			"esp_wifi_private.h": "c",
+			"mpu6050.h": "c",
+			"initializer_list": "c",
+			"task.h": "c",
+			"*.inc": "cpp",
+			"esp_http_server.h": "c",
+			"type_traits": "c",
+			"param.h": "c",
+			"err.h": "c"
+		}
+	}
+}
