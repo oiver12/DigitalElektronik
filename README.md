@@ -32,7 +32,9 @@
                 "D:/Espressif/frameworks/esp-idf-v4.4/components/**"
             ],
 ```
-
+### C/C++ Edit configurations (UI)
+* Compiler path: esp../xtensa-esp32-elf-gcc.exe
+* IntelliSense mode: gcc-x64
 ### launch.json
 ```json
 {
