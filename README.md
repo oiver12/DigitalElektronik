@@ -2,7 +2,7 @@
 ## How to use example
 
 ### Preferences: Open Settings (JSON) -->settings.json
-```
+```json
 "terminal.integrated.defaultProfile.windows": "Command Prompt",
     "terminal.integrated.profiles.windows": {
         "PowerShell": {
