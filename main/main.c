@@ -26,6 +26,7 @@
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
+#include "driver/mcpwm.h"
 
 #define PORT                        3333
 #define KEEPALIVE_IDLE              5
@@ -42,6 +43,13 @@
 #define BIN1                     33
 #define BIN2                     25
 #define STBY                     32
+
+// You can get these value from the datasheet of servo you use, in general pulse width varies between 1000 to 2000 mocrosecond
+#define SERVO_MIN_PULSEWIDTH_US (1000) // Minimum pulse width in microsecond
+#define SERVO_MAX_PULSEWIDTH_US (2000) // Maximum pulse width in microsecond
+#define SERVO_MAX_DEGREE        (90)   // Maximum angle in degree upto which servo can rotate
+
+#define SERVO_PULSE_GPIO        (18)   // GPIO connects to the PWM signal line
 
 int LEDC_DUTY = 1024;
 static const char *TAG = "example";
@@ -213,6 +221,11 @@ CLEAN_UP:
     vTaskDelete(NULL);
 }
 
+static inline uint32_t example_convert_servo_angle_to_duty_us(int angle)
+{
+    return (angle + SERVO_MAX_DEGREE) * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) / (2 * SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US;
+}
+
 void app_main()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -254,6 +267,24 @@ void app_main()
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     printf("Started PWM \n");
+
+    mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM0A, SERVO_PULSE_GPIO); // To drive a RC servo, one MCPWM generator is enough
+
+    mcpwm_config_t pwm_config = {
+        .frequency = 50, // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
+        .cmpr_a = 0,     // duty cycle of PWMxA = 0
+        .counter_mode = MCPWM_UP_COUNTER,
+        .duty_mode = MCPWM_DUTY_MODE_0,
+    };
+    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
+
+     while (1) {
+        for (int angle = -SERVO_MAX_DEGREE; angle < SERVO_MAX_DEGREE; angle++) {
+            ESP_LOGI(TAG, "Angle of rotation: %d", angle);
+            ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(angle)));
+            vTaskDelay(pdMS_TO_TICKS(1000)); //Add delay, since it takes time for servo to rotate, generally 100ms/60degree rotation under 5V power supply
+        }
+    }
 }
 
 void printTask(void* ps)
