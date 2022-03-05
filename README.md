@@ -26,11 +26,23 @@
 
 ### c_cpp_proprties.json
 ```json
- "includePath": [
+  "name": "Win32",
+            "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/build/config",
                 "D:/Espressif/frameworks/esp-idf-v4.4/components/**"
             ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "windowsSdkVersion": "10.0.19041.0",
+            "compilerPath": "D:\\Espressif\\tools\\xtensa-esp32-elf\\esp-2021r2-patch2-8.4.0\\xtensa-esp32-elf\\bin\\xtensa-esp32-elf-gcc.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
 ```
 ### C/C++ Edit configurations (UI)
 * Compiler path: esp../xtensa-esp32-elf-gcc.exe
