@@ -51,7 +51,7 @@ CONFIG_MPU_LOG_LEVEL_DEFAULT=y
 # CONFIG_MPU_LOG_LEVEL_WARN is not set
 # CONFIG_MPU_LOG_LEVEL_INFO is not set
 CONFIG_MPU_LOG_LEVEL=3
-CONFIG_MPU_ENABLE_DMP=y
+# CONFIG_MPU_ENABLE_DMP is not set
 CONFIG_MPU_LOG_ERROR_TRACES=y
 # end of MPU driver
 
@@ -235,12 +235,6 @@ CONFIG_COMPILER_STACK_CHECK_MODE_NONE=y
 # MPU driver
 #
 # end of MPU driver
-
-#
-# SPIbus
-#
-# CONFIG_SPIBUS_LOG_READWRITES is not set
-# end of SPIbus
 
 #
 # Application Level Tracing

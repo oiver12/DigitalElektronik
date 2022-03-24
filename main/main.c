@@ -47,7 +47,7 @@
 // You can get these value from the datasheet of servo you use, in general pulse width varies between 1000 to 2000 mocrosecond
 #define SERVO_MIN_PULSEWIDTH_US (1000) // Minimum pulse width in microsecond
 #define SERVO_MAX_PULSEWIDTH_US (2000) // Maximum pulse width in microsecond
-#define SERVO_MAX_DEGREE        (90)   // Maximum angle in degree upto which servo can rotate
+#define SERVO_MAX_DEGREE        (360)   // Maximum angle in degree upto which servo can rotate
 
 #define SERVO_PULSE_GPIO        (18)   // GPIO connects to the PWM signal line
 
@@ -226,15 +226,39 @@ static inline uint32_t example_convert_servo_angle_to_duty_us(int angle)
     return (angle + SERVO_MAX_DEGREE) * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) / (2 * SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US;
 }
 
+void ServoStart(void *pvParameters)
+{
+    mpu6050_rotation_t *rotations = (mpu6050_rotation_t *)pvParameters;
+    while(true)
+    {
+        //wait till unblocked from Interrupt
+        uint32_t notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (notificationValue > 1) {
+            ESP_LOGW(TAG, "Task Notification higher than 1, value: %d", notificationValue);
+            continue;
+        }
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(180)));
+        const esp_timer_create_args_t oneshot_timer_args = {
+            .callback = &oneshot_timer_callback,
+            /* argument specified here will be passed to timer callback function */
+            .arg = (void*) periodic_timer,
+            .name = "Servo-Timer"
+        };
+        esp_timer_handle_t oneshot_timer;
+        ESP_ERROR_CHECK(esp_timer_create(&oneshot_timer_args, &oneshot_timer));
+        ESP_ERROR_CHECK(esp_timer_start_once(oneshot_timer, 5000000));
+    }
+}
+
 void app_main()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(example_connect());
+    //ESP_ERROR_CHECK(example_connect());
 
-    xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 5, NULL);
+    //xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 5, NULL);
 
     mpu6050_rotation_t rot = {
         .pitch = 0,
@@ -244,10 +268,6 @@ void app_main()
     xTaskCreate(mpuTask, "mpuTask", 4 * 1024, &rot, 6, NULL);
     xTaskCreate(printTask, "printTask", 2 * 1024, &rot, 5, NULL);
 
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
     gpio_config_t io_config = {
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_OUTPUT,
@@ -259,7 +279,7 @@ void app_main()
     gpio_set_level(BIN1, 1);
     gpio_set_level(BIN2, 0);
     gpio_set_level(STBY, 1);
-     // Set the LEDC peripheral configuration
+    // Set the LEDC peripheral configuration
     start_pwm();
     printf("Started MotorPins \n");
     // Set duty to 50%
@@ -268,7 +288,7 @@ void app_main()
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     printf("Started PWM \n");
 
-    mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM0A, SERVO_PULSE_GPIO); // To drive a RC servo, one MCPWM generator is enough
+    mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM1A, SERVO_PULSE_GPIO); // To drive a RC servo, one MCPWM generator is enough
 
     mcpwm_config_t pwm_config = {
         .frequency = 50, // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
@@ -276,15 +296,9 @@ void app_main()
         .counter_mode = MCPWM_UP_COUNTER,
         .duty_mode = MCPWM_DUTY_MODE_0,
     };
-    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
+    mcpwm_init(MCPWM_UNIT_1, MCPWM_TIMER_1, &pwm_config);
 
-     while (1) {
-        for (int angle = -SERVO_MAX_DEGREE; angle < SERVO_MAX_DEGREE; angle++) {
-            ESP_LOGI(TAG, "Angle of rotation: %d", angle);
-            ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(angle)));
-            vTaskDelay(pdMS_TO_TICKS(1000)); //Add delay, since it takes time for servo to rotate, generally 100ms/60degree rotation under 5V power supply
-        }
-    }
+    xTaskCreate(ServoTask, "servoTask", 2 * 1024, &rot, 5, NULL);
 }
 
 void printTask(void* ps)
