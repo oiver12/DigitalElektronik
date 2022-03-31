@@ -21,12 +21,26 @@
 #include "mpu6050connector.h"
 #include <driver/i2c.h>
 #include "driver/ledc.h"
-
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 #include "driver/mcpwm.h"
+#include "PID.h"
+
+/* Controller parameters */
+#define PID_KP  3.0f
+#define PID_KI  0
+#define PID_KD  0
+
+#define PID_TAU 0.02f
+
+#define PID_LIM_MIN -45.0f
+#define PID_LIM_MAX  45.0f
+
+#define PID_LIM_MIN_INT -10.0f
+#define PID_LIM_MAX_INT  10.0f
+
 
 #define PORT                        3333
 #define KEEPALIVE_IDLE              5
@@ -235,13 +249,20 @@ static inline uint32_t example_convert_servo_angle_to_duty_us(int angle)
 void ServoTask(void *pvParameters)
 {
     float multiplier = 0.5; //45 --> rotationSum 5
-    float servoAngleMaxSpeed = 20; //ab 20 angle dreht der Servo mit voller Geschwindigkeit
+    float servoMaxSpeed = 20;
     float nullPoint = -2; //wo der Servo stehenbliebt: nicht 0 sondern -2
     float maxRotations = 5; //max Auslenkung vom Gewicht
     float rotationsPerSecMaxSpeed = 0.666;
     float rotationsSum = 0;
     float lastTime = esp_timer_get_time();
     float servoSpeed = 0;
+     /* Initialise PID controller */
+    PIDController pid = {PID_KP, PID_KI, PID_KD,
+                        PID_TAU,
+                        PID_LIM_MIN, PID_LIM_MAX,
+			            PID_LIM_MIN_INT, PID_LIM_MAX_INT,
+                        0.1 };
+    PIDController_Init(&pid);
     //TODO: Race Conditions?
     mpu6050_rotation_t *rotations = (mpu6050_rotation_t *)pvParameters;
     vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -250,22 +271,34 @@ void ServoTask(void *pvParameters)
     {
         float deltaT = (esp_timer_get_time()-lastTime) / 1000000;
         //clamp servoSpeed zwischen -1 und 1. Multipliziere mit rotationsPerSecMaxSpeed deltaT, um gemachte Rotations seit letzter Rechnung ausrechnen.
-        rotationsSum += (servoSpeed / servoAngleMaxSpeed) * rotationsPerSecMaxSpeed * (deltaT);
-        float desiredRotationsSum = angle / (90 * multiplier) * maxRotations;
-        ESP_LOGI(TAG, "Des %.3f", desiredRotationsSum);
-        servoSpeed = (desiredRotationsSum - rotationsSum) / maxRotations * servoAngleMaxSpeed; //ab 5 Differenz dreht der Motor ganz schnell
+        rotationsSum += (servoSpeed / PID_LIM_MAX) * rotationsPerSecMaxSpeed * (deltaT);
+        //float desiredRotationsSum = angle / (90 * multiplier) * maxRotations;
+        float desiredRotationsSum = rotations->roll / (90 * multiplier) * maxRotations;
+        ESP_LOGI(TAG, "Des %.3f, Rotation %.3f", desiredRotationsSum, rotationsSum);
+        pid.T = deltaT;
+        PIDController_Update(&pid, desiredRotationsSum, rotationsSum);
+        servoSpeed = pid.out;
+        //servoSpeed = (desiredRotationsSum - rotationsSum) / maxRotations * servoAngleMaxSpeed; //ab 5 Differenz dreht der Motor ganz schnell
         lastTime = esp_timer_get_time();
-        if(servoSpeed > servoAngleMaxSpeed)
+        if(servoSpeed > servoMaxSpeed)
         {
-            servoSpeed = servoAngleMaxSpeed;
+            servoSpeed = servoMaxSpeed;
         }
-        else if(servoSpeed < -servoAngleMaxSpeed)
+        else if(servoSpeed < -servoMaxSpeed)
         {
-            servoSpeed = -servoAngleMaxSpeed;
+            servoSpeed = -servoMaxSpeed;
         }
         //TODO: bliebt in dieser Loop stecken
         if(rotationsSum > maxRotations || rotationsSum < -maxRotations)
         {
+            if(rotationsSum > maxRotations)
+            {
+                rotationsSum = maxRotations - 0.1;
+            }
+            else if(rotationsSum < -maxRotations)
+            {
+                rotationsSum = -maxRotations + 0.1;
+            }
             //wenn voll gedreht, nicht mehr drehen.
             servoSpeed = 0;
         }
@@ -280,9 +313,9 @@ void app_main()
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(example_connect());
+    //ESP_ERROR_CHECK(example_connect());
 
-    xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 7, NULL);
+    //xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 7, NULL);
 
     mpu6050_rotation_t rot = {
         .pitch = 0,

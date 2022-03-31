@@ -237,12 +237,6 @@ CONFIG_COMPILER_STACK_CHECK_MODE_NONE=y
 # end of MPU driver
 
 #
-# SPIbus
-#
-# CONFIG_SPIBUS_LOG_READWRITES is not set
-# end of SPIbus
-
-#
 # Application Level Tracing
 #
 # CONFIG_APPTRACE_DEST_JTAG is not set
