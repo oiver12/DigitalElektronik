@@ -1,11 +1,3 @@
-/* Simple HTTP Server Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <string.h>
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h"
@@ -30,13 +22,13 @@
 
 /* Controller parameters */
 #define PID_KP  3.0f
-#define PID_KI  0
-#define PID_KD  0
+#define PID_KI  4
+#define PID_KD  9
 
 #define PID_TAU 0.02f
 
-#define PID_LIM_MIN -45.0f
-#define PID_LIM_MAX  45.0f
+#define PID_LIM_MIN -20.0f
+#define PID_LIM_MAX  20.0f
 
 #define PID_LIM_MIN_INT -10.0f
 #define PID_LIM_MAX_INT  10.0f
@@ -58,23 +50,110 @@
 #define BIN2                     25
 #define STBY                     32
 
-// You can get these value from the datasheet of servo you use, in general pulse width varies between 1000 to 2000 mocrosecond
 #define SERVO_MIN_PULSEWIDTH_US (1000) // Minimum pulse width in microsecond
 #define SERVO_MAX_PULSEWIDTH_US (2000) // Maximum pulse width in microsecond
 #define SERVO_MAX_DEGREE        (90)   // Maximum angle in degree upto which servo can rotate
 
 #define SERVO_PULSE_GPIO        (18)   // GPIO connects to the PWM signal line
 
+PIDController pidController = {.Kp = PID_KP, .Ki = PID_KI, .Kd = PID_KD,
+                        .tau = PID_TAU,
+                        .limMin = PID_LIM_MIN, .limMax = PID_LIM_MAX,
+			            .limMinInt = PID_LIM_MIN_INT, .limMaxInt = PID_LIM_MAX_INT,
+                        .T = 0.1 };
 int LEDC_DUTY = 1024;
+int startDuty = 1024;
+int desiredDuty = 1024;
 int angle = 0;
-static const char *TAG = "example";
+TaskHandle_t dutyMotorHandle = NULL;
+static const char *TAG = "main";
 void printTask(void*);
+bool motorRestart = false;
 
+SemaphoreHandle_t motorRestart_mutex = NULL;
+
+bool MotorToDesired(int desired)
+{
+    int start = LEDC_DUTY;
+    int stepSize = 50; //50*20 = 1000 pro Sekunde --> 12% von ganzem
+    ESP_LOGI(TAG, "Started Motor Routine. Steps: %i, Desired: %i, Start: %i", (int)((abs(desired-start))/stepSize), desired, start);
+    for (size_t i = 1; i < (int)((abs(desired-start))/stepSize) + 1; i++)
+    {
+        bool restart = false;
+        xSemaphoreTake(motorRestart_mutex, portMAX_DELAY);
+        {
+            restart = motorRestart;
+        }
+        xSemaphoreGive(motorRestart_mutex);
+        if(restart)
+        {
+            ESP_LOGI(TAG, "Restarted");
+            return false;
+        }
+        if(start < desired)
+        {
+            LEDC_DUTY = start + stepSize * i;
+        }
+        else
+        {
+            LEDC_DUTY = start - stepSize * i;
+        }
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+        vTaskDelay(10 / portTICK_PERIOD_MS); //all 100ms -> 10 Hz
+    }
+    //ESP_LOGI(TAG, "Finsih with desired: %i, and end: %i", desiredDuty, LEDC_DUTY);
+    return true;
+}
 
 void setDutyCycleMotor()
 {
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+    bool isBackwards = false;
+    while(true)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        xSemaphoreTake(motorRestart_mutex, portMAX_DELAY);
+        {
+            motorRestart = false;
+        }
+        xSemaphoreGive(motorRestart_mutex);
+        if(isBackwards)
+        {
+            startDuty = -startDuty;
+        }
+        if(desiredDuty < 0 && startDuty > 0)
+        {
+            ESP_LOGI(TAG, "1: Start: %i, End: %i.", startDuty, desiredDuty);
+            //vorwärts langsamer werden
+            if(!MotorToDesired(0))
+            {
+                continue;
+            }
+            isBackwards = true;
+            gpio_set_level(BIN1, 0);
+            gpio_set_level(BIN2, 1);
+            MotorToDesired(-desiredDuty);
+        }
+        else if(desiredDuty > 0 && startDuty < 0)
+        {
+            ESP_LOGI(TAG, "2: Start: %i, End: %i.", startDuty, desiredDuty);
+            if(!MotorToDesired(0))
+            {
+                continue;
+            }
+            isBackwards = false;
+            gpio_set_level(BIN1, 1);
+            gpio_set_level(BIN2, 0);
+            MotorToDesired(desiredDuty);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "3: Start: %i, End: %i.", startDuty, desiredDuty);
+            MotorToDesired(abs(desiredDuty));
+        }
+        
+    }
+    vTaskDelete(NULL);
 }
 
 static void start_pwm(void)
@@ -119,27 +198,37 @@ static void do_retransmit(const int sock)
             if(rx_buffer[0] == 's')
             {
                 int i = 0;
-                sscanf(rx_buffer ,"%*[^0123456789]%d", &i);
+                sscanf(rx_buffer ,"s%d", &i);
                 ESP_LOGI(TAG, "Speed %d \n", i);
-                LEDC_DUTY = i;
-                setDutyCycleMotor();
+                desiredDuty = i;
+                startDuty = LEDC_DUTY;
+                xSemaphoreTake(motorRestart_mutex, portMAX_DELAY);
+                {
+                    motorRestart = true;
+                }
+                xSemaphoreGive(motorRestart_mutex);
+                xTaskNotifyGive(dutyMotorHandle);
             }
             else if(rx_buffer[0] == 'a')
             {
-                sscanf(rx_buffer, "%*[^-0123456789] %d", &angle);
-                ESP_LOGI(TAG,"Speed %d \n", angle);
+                sscanf(rx_buffer, "a %d", &angle);
+                ESP_LOGI(TAG,"Angle %d \n", angle);
             }
-            /*
-            // send() can return less bytes than supplied length.
-            // Walk-around for robust implementation.
-            int to_write = len;
-            while (to_write > 0) {
-                int written = send(sock, rx_buffer + (len - to_write), to_write, 0);
-                if (written < 0) {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                }
-                to_write -= written;
-            }*/
+            else if(rx_buffer[0] == 'p')
+            {
+                int pCo = 0;
+                int iCo = 0;
+                int dCo = 0;
+                int limCo = 0;
+                sscanf(rx_buffer, "p %d, %d, %d, %d", &pCo, &iCo, &dCo, &limCo);
+                pidController.Kp = (float)pCo / 100.0f;
+                pidController.Ki = (float)iCo / 100.0f;
+                pidController.Kd = (float)dCo / 100.0f;
+                pidController.limMinInt = (float)limCo / -100.0f;
+                pidController.limMaxInt = (float)limCo / 100.0f;
+                PIDController_Init(&pidController);
+                ESP_LOGI(TAG,"P %.3f, I %.3f, D %.3f, L %.3f", pidController.Kp, pidController.Ki, pidController.Kd, pidController.limMaxInt);
+            }
         }
     } while (len > 0);
 }
@@ -248,74 +337,82 @@ static inline uint32_t example_convert_servo_angle_to_duty_us(int angle)
 
 void ServoTask(void *pvParameters)
 {
-    float multiplier = 0.5; //45 --> rotationSum 5
-    float servoMaxSpeed = 20;
-    float nullPoint = -2; //wo der Servo stehenbliebt: nicht 0 sondern -2
-    float maxRotations = 5; //max Auslenkung vom Gewicht
-    float rotationsPerSecMaxSpeed = 0.666;
-    float rotationsSum = 0;
+    // float multiplier = 0.5; //45 --> rotationSum 5
+    // float nullPoint = -2; //wo der Servo stehenbliebt: nicht 0 sondern -2
+    // float maxRotations = 0.8; //max Auslenkung vom Gewicht
+    // float rotationsPerSecMaxSpeed = 0.666;
+    // float rotationsSum = 0;
+    // float lastTime = esp_timer_get_time();
+    // float servoSpeed = 0;
+    //  /* Initialise PID controller */
+    // PIDController_Init(&pidController);
+    // //TODO: Race Conditions?
+    // mpu6050_rotation_t *rotations = (mpu6050_rotation_t *)pvParameters;
+    // vTaskDelay(2000 / portTICK_PERIOD_MS);
+    // ESP_LOGI(TAG, "Start Servo");
+    // while(true)
+    // {
+    //     float deltaT = (esp_timer_get_time()-lastTime) / 1000000;
+    //     //clamp servoSpeed zwischen -1 und 1. Multipliziere mit rotationsPerSecMaxSpeed deltaT, um gemachte Rotations seit letzter Rechnung ausrechnen.
+    //     rotationsSum += (servoSpeed / PID_LIM_MAX) * rotationsPerSecMaxSpeed * (deltaT);
+    //     float desiredRotationsSum = angle / (90 * multiplier) * maxRotations;
+    //     //float desiredRotationsSum = rotations->roll / (90 * multiplier) * maxRotations;
+    //     //ESP_LOGI(TAG, "Des %.3f, Rotation %.3f", desiredRotationsSum, rotationsSum);
+    //     pidController.T = deltaT;
+    //     PIDController_Update(&pidController, desiredRotationsSum, rotationsSum);
+    //     servoSpeed = pidController.out;
+    //     //servoSpeed = (desiredRotationsSum - rotationsSum) / maxRotations * servoAngleMaxSpeed; //ab 5 Differenz dreht der Motor ganz schnell
+    //     lastTime = esp_timer_get_time();
+    //     if(servoSpeed > PID_LIM_MAX)
+    //     {
+    //         servoSpeed = PID_LIM_MAX;
+    //     }
+    //     else if(servoSpeed < PID_LIM_MIN)
+    //     {
+    //         servoSpeed = PID_LIM_MIN;
+    //     }
+    //     if(rotationsSum > maxRotations || rotationsSum < -maxRotations)
+    //     {
+    //         if(rotationsSum > maxRotations)
+    //         {
+    //             rotationsSum = maxRotations - 0.05;
+    //         }
+    //         else if(rotationsSum < -maxRotations)
+    //         {
+    //             rotationsSum = -maxRotations + 0.05;
+    //         }
+    //         //wenn voll gedreht, nicht mehr drehen.
+    //         servoSpeed = 0;
+    //     }
+    //     ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(servoSpeed+nullPoint)));
+    //     vTaskDelay(100 / portTICK_PERIOD_MS);
+    // }
+    PIDController_Init(&pidController);
     float lastTime = esp_timer_get_time();
-    float servoSpeed = 0;
-     /* Initialise PID controller */
-    PIDController pid = {PID_KP, PID_KI, PID_KD,
-                        PID_TAU,
-                        PID_LIM_MIN, PID_LIM_MAX,
-			            PID_LIM_MIN_INT, PID_LIM_MAX_INT,
-                        0.1 };
-    PIDController_Init(&pid);
-    //TODO: Race Conditions?
-    mpu6050_rotation_t *rotations = (mpu6050_rotation_t *)pvParameters;
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
-    ESP_LOGI(TAG, "Start Servo");
+    const float kugelAngleGerade = 0;
     while(true)
     {
         float deltaT = (esp_timer_get_time()-lastTime) / 1000000;
-        //clamp servoSpeed zwischen -1 und 1. Multipliziere mit rotationsPerSecMaxSpeed deltaT, um gemachte Rotations seit letzter Rechnung ausrechnen.
-        rotationsSum += (servoSpeed / PID_LIM_MAX) * rotationsPerSecMaxSpeed * (deltaT);
-        //float desiredRotationsSum = angle / (90 * multiplier) * maxRotations;
-        float desiredRotationsSum = rotations->roll / (90 * multiplier) * maxRotations;
-        ESP_LOGI(TAG, "Des %.3f, Rotation %.3f", desiredRotationsSum, rotationsSum);
-        pid.T = deltaT;
-        PIDController_Update(&pid, desiredRotationsSum, rotationsSum);
-        servoSpeed = pid.out;
-        //servoSpeed = (desiredRotationsSum - rotationsSum) / maxRotations * servoAngleMaxSpeed; //ab 5 Differenz dreht der Motor ganz schnell
+        // pidController.T = deltaT;
+        // PIDController_Update(&pidController, kugelAngleGerade, angle);
+        // float servoAngle = pidController.out;
+        // ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(servoAngle)));
+        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(angle)));
         lastTime = esp_timer_get_time();
-        if(servoSpeed > servoMaxSpeed)
-        {
-            servoSpeed = servoMaxSpeed;
-        }
-        else if(servoSpeed < -servoMaxSpeed)
-        {
-            servoSpeed = -servoMaxSpeed;
-        }
-        //TODO: bliebt in dieser Loop stecken
-        if(rotationsSum > maxRotations || rotationsSum < -maxRotations)
-        {
-            if(rotationsSum > maxRotations)
-            {
-                rotationsSum = maxRotations - 0.1;
-            }
-            else if(rotationsSum < -maxRotations)
-            {
-                rotationsSum = -maxRotations + 0.1;
-            }
-            //wenn voll gedreht, nicht mehr drehen.
-            servoSpeed = 0;
-        }
-        ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(servoSpeed+nullPoint)));
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
 void app_main()
 {
+    motorRestart_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    //ESP_ERROR_CHECK(example_connect());
+    ESP_ERROR_CHECK(example_connect());
 
-    //xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 7, NULL);
+    xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 7, NULL);
 
     mpu6050_rotation_t rot = {
         .pitch = 0,
@@ -323,7 +420,7 @@ void app_main()
         .yaw = 0
     };
     xTaskCreate(mpuTask, "mpuTask", 4 * 1024, &rot, 6, NULL);
-    //xTaskCreate(printTask, "printTask", 2 * 1024, &rot, 5, NULL);
+    xTaskCreate(printTask, "printTask", 2 * 1024, &rot, 5, NULL);
 
     gpio_config_t io_config = {
         .intr_type = GPIO_INTR_DISABLE,
@@ -344,6 +441,7 @@ void app_main()
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     printf("Started PWM \n");
+    xTaskCreate(setDutyCycleMotor, "MotorTask", 2 * 1024, NULL, 2, &dutyMotorHandle);
 
     mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM1A, SERVO_PULSE_GPIO); // To drive a RC servo, one MCPWM generator is enough
 
