@@ -46,9 +46,9 @@
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 //#define LEDC_DUTY               (1024) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (1000) // Frequency in Hertz. Set frequency at 5 kHz
-#define BIN1                     33
-#define BIN2                     25
-#define STBY                     32
+#define BIN1                     15
+#define BIN2                     14
+#define STBY                     34
 
 #define SERVO_MIN_PULSEWIDTH_US (1000) // Minimum pulse width in microsecond
 #define SERVO_MAX_PULSEWIDTH_US (2000) // Maximum pulse width in microsecond
@@ -61,9 +61,9 @@ PIDController pidController = {.Kp = PID_KP, .Ki = PID_KI, .Kd = PID_KD,
                         .limMin = PID_LIM_MIN, .limMax = PID_LIM_MAX,
 			            .limMinInt = PID_LIM_MIN_INT, .limMaxInt = PID_LIM_MAX_INT,
                         .T = 0.1 };
-int LEDC_DUTY = 1024;
-int startDuty = 1024;
-int desiredDuty = 1024;
+int LEDC_DUTY = 0;
+int startDuty = 0;
+int desiredDuty = 0;
 int angle = 0;
 TaskHandle_t dutyMotorHandle = NULL;
 static const char *TAG = "main";
@@ -130,8 +130,8 @@ void setDutyCycleMotor()
                 continue;
             }
             isBackwards = true;
-            gpio_set_level(BIN1, 0);
-            gpio_set_level(BIN2, 1);
+            //gpio_set_level(BIN1, 0);
+            //gpio_set_level(BIN2, 1);
             MotorToDesired(-desiredDuty);
         }
         else if(desiredDuty > 0 && startDuty < 0)
@@ -142,8 +142,8 @@ void setDutyCycleMotor()
                 continue;
             }
             isBackwards = false;
-            gpio_set_level(BIN1, 1);
-            gpio_set_level(BIN2, 0);
+            //gpio_set_level(BIN1, 1);
+            //gpio_set_level(BIN2, 0);
             MotorToDesired(desiredDuty);
         }
         else
