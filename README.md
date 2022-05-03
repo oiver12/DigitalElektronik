@@ -1,6 +1,6 @@
 # Inhalt
--Alle Dateien in main Ordner, welche selbstprogrammiert sind
--Umgebung: ESP-IDF
+- Alle Dateien in main Ordner, welche selbstprogrammiert sind \n
+- Umgebung: ESP-IDF
 # Setup (für VS Code)
 ### Preferences: Open Settings (JSON) -->settings.json
 ```json
