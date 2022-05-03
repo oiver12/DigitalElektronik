@@ -1,5 +1,7 @@
 //https://github.com/natanaeljr/esp32-MPU-driver/tree/master/examples
 
+//Bibliothek ist in C++ und mit Klassen. Diese Datei verbindet main (C) mit der C++ Bibliothek
+
 #include "mpu6050connector.h"
 #include "I2Cbus.hpp"
 #include "MPU.hpp"
@@ -11,10 +13,6 @@
 extern "C" {
 #endif
 static const char *TAG = "MPU6050Conn";
-// Inside this "extern C" block, I can implement functions in C++, which will externally 
-//   appear as C functions (which means that the function IDs will be their names, unlike
-//   the regular C++ behavior, which allows defining multiple functions with the same name
-//   (overloading) and hence uses function signature hashing to enforce unique IDs),
 
 static constexpr int kInterruptPin         = 17;  // GPIO_NUM
 static constexpr uint16_t kSampleRate      = 250;  // Hz
@@ -130,6 +128,7 @@ void mpuTask(void* pvParameters)
     while (true) {
         // Wait for notification from mpuISR
         uint32_t notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        //Mehrmals Interrupt seit ausgelesen das letzte Mal!
         if (notificationValue > 1) {
             ESP_LOGW(TAG, "Task Notification higher than 1, value: %d", notificationValue);
             MPUInstance->resetFIFO();
@@ -189,6 +188,7 @@ void mpuTask(void* pvParameters)
     vTaskDelete(nullptr);
 }
 
+//Interrupt vom Sensor, entblockt mpuTask, damit Daten ausgelesen werden
 IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
 {
     BaseType_t HPTaskWoken = pdFALSE;

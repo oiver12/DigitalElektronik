@@ -102,7 +102,6 @@ bool MotorToDesired(int desired)
         ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
         vTaskDelay(10 / portTICK_PERIOD_MS); //all 100ms -> 10 Hz
     }
-    //ESP_LOGI(TAG, "Finsih with desired: %i, and end: %i", desiredDuty, LEDC_DUTY);
     return true;
 }
 
@@ -156,6 +155,7 @@ void setDutyCycleMotor()
     vTaskDelete(NULL);
 }
 
+//für Motor
 static void start_pwm(void)
 {
      // Prepare and then apply the LEDC PWM timer configuration
@@ -181,7 +181,7 @@ static void start_pwm(void)
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-static void do_retransmit(const int sock)
+static void tcp_message(const int sock)
 {
     int len;
     char rx_buffer[128];
@@ -195,11 +195,12 @@ static void do_retransmit(const int sock)
         } else {
             rx_buffer[len] = 0; // Null-terminate whatever is received and treat it like a string
             ESP_LOGI(TAG, "Received %d bytes: %s", len, rx_buffer);
+            //empfangene string mit 's' = speed und Angle von Joystick
             if(rx_buffer[0] == 's')
             {
                 int i = 0;
-                sscanf(rx_buffer ,"s%d", &i);
-                ESP_LOGI(TAG, "Speed %d \n", i);
+                sscanf(rx_buffer ,"s%d %d", &i, &angle);
+                ESP_LOGI(TAG, "Speed %d, Angle %d", i, angle);
                 desiredDuty = i;
                 startDuty = LEDC_DUTY;
                 xSemaphoreTake(motorRestart_mutex, portMAX_DELAY);
@@ -209,11 +210,13 @@ static void do_retransmit(const int sock)
                 xSemaphoreGive(motorRestart_mutex);
                 xTaskNotifyGive(dutyMotorHandle);
             }
+            //nur Angel
             else if(rx_buffer[0] == 'a')
             {
                 sscanf(rx_buffer, "a %d", &angle);
                 ESP_LOGI(TAG,"Angle %d \n", angle);
             }
+            //PID Controller für Konifguration
             else if(rx_buffer[0] == 'p')
             {
                 int pCo = 0;
@@ -319,7 +322,7 @@ static void tcp_server_task(void *pvParameters)
 #endif
         ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
 
-        do_retransmit(sock);
+        tcp_message(sock);
 
         shutdown(sock, 0);
         close(sock);
@@ -335,6 +338,7 @@ static inline uint32_t example_convert_servo_angle_to_duty_us(int angle)
     return (angle + SERVO_MAX_DEGREE) * (SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) / (2 * SERVO_MAX_DEGREE) + SERVO_MIN_PULSEWIDTH_US;
 }
 
+//Servo zu desired Angle und PID Controller
 void ServoTask(void *pvParameters)
 {
     // float multiplier = 0.5; //45 --> rotationSum 5
@@ -387,6 +391,8 @@ void ServoTask(void *pvParameters)
     //     ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(servoSpeed+nullPoint)));
     //     vTaskDelay(100 / portTICK_PERIOD_MS);
     // }
+    //von Sensor
+    mpu6050_rotation_t *rotations = (mpu6050_rotation_t *)pvParameters;
     PIDController_Init(&pidController);
     float lastTime = esp_timer_get_time();
     const float kugelAngleGerade = 0;
@@ -399,12 +405,13 @@ void ServoTask(void *pvParameters)
         // ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(servoAngle)));
         ESP_ERROR_CHECK(mcpwm_set_duty_in_us(MCPWM_UNIT_1, MCPWM_TIMER_1, MCPWM_OPR_A, example_convert_servo_angle_to_duty_us(angle)));
         lastTime = esp_timer_get_time();
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(400 / portTICK_PERIOD_MS);
     }
 }
 
 void app_main()
 {
+    //Mutex für Multithread
     motorRestart_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
@@ -419,9 +426,10 @@ void app_main()
         .roll = 0,
         .yaw = 0
     };
+    //Sensor auslesen Task
     xTaskCreate(mpuTask, "mpuTask", 4 * 1024, &rot, 6, NULL);
     xTaskCreate(printTask, "printTask", 2 * 1024, &rot, 5, NULL);
-
+    //Motor Init GPIO
     gpio_config_t io_config = {
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_OUTPUT,
@@ -433,18 +441,16 @@ void app_main()
     gpio_set_level(BIN1, 1);
     gpio_set_level(BIN2, 0);
     gpio_set_level(STBY, 1);
-    // Set the LEDC peripheral configuration
+    //Start Motor PWM
     start_pwm();
     printf("Started MotorPins \n");
-    // Set duty to 50%
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
     printf("Started PWM \n");
     xTaskCreate(setDutyCycleMotor, "MotorTask", 2 * 1024, NULL, 2, &dutyMotorHandle);
 
     mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM1A, SERVO_PULSE_GPIO); // To drive a RC servo, one MCPWM generator is enough
-
+    //PWM für Servo
     mcpwm_config_t pwm_config = {
         .frequency = 50, // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
         .cmpr_a = 0,     // duty cycle of PWMxA = 0
@@ -456,6 +462,7 @@ void app_main()
     xTaskCreate(ServoTask, "servoTask", 2 * 1024, &rot, 5, NULL);
 }
 
+//Für Debug
 void printTask(void* ps)
 {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
