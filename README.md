@@ -2,6 +2,7 @@
 - Alle Dateien in main Ordner, welche selbstprogrammiert sind \n
 - Umgebung: ESP-IDF
 # Setup (für VS Code)
+-For compiling. Open in VS Code. Type into Terminal esp_idf. And compile with idf.py build. flash with idf.py flash.
 ### Preferences: Open Settings (JSON) -->settings.json
 ```json
 "terminal.integrated.defaultProfile.windows": "Command Prompt",
